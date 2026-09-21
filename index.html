@@ -64,7 +64,7 @@
 </div>
 <script>
 "use strict";
-const BUILD = "v2.4";   // 頁面版本（換新版會變，用嚟確認有冇 update）
+const BUILD = "v2.5";   // 頁面版本（換新版會變，用嚟確認有冇 update）
 const GIST_URL = "https://gist.githubusercontent.com/applegreentea2023/5423e33306d137099aaed0d2989c7d9b/raw/family.json";
 const FOOTER_Y = 424;          // 底部注意事項分隔線（同 firmware 一致）
 const COL_BOTTOM = FOOTER_Y - 10;
@@ -92,7 +92,8 @@ function itemsFor(d) {
     const end = e.mmdd_end || e.mmdd;
     if (e.mmdd <= mmdd && mmdd <= end) out.push(e);
   }
-  return out;
+  // 兩邊 merge 要按時間排（穩定排序）
+  return out.sort((a, b) => String(a.time || "").localeCompare(String(b.time || "")));
 }
 const notesFor = d => (FAM.reminders || []).filter(r => r.mmdd === mmddOf(d));
 const holidayName = d => {
