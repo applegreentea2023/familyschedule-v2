@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>墨水屏 V2 今日／聽日 Preview</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { overflow-x: hidden; }
+  body {
+    background: #2b2b2b;
+    font-family: "Noto Sans TC", "Microsoft JhengHei", "PingFang TC", sans-serif;
+    display: flex; flex-direction: column; align-items: center;
+    padding: 16px; min-height: 100vh;
+  }
+  .toolbar { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; color: #ddd; flex-wrap: wrap; justify-content: center; }
+  .toolbar button, .toolbar input[type=date] {
+    background: #444; color: #eee; border: 1px solid #666; border-radius: 6px;
+    padding: 5px 12px; font-size: 14px; cursor: pointer;
+  }
+  .toolbar button:hover { background: #555; }
+  #dayLabel { font-size: 17px; font-weight: bold; min-width: 190px; text-align: center; }
+  #gistStatus { font-size: 12px; color: #9c9; margin-bottom: 10px; text-align: center; }
+  #gistStatus.err { color: #ff7b7b; }
+  .epd-frame { padding: 16px; background: #1a1a1a; border-radius: 10px; box-shadow: 0 4px 20px rgba(0,0,0,.5); }
+  #epdScale { position: relative; }
+  #epd {
+    width: 800px; height: 480px; background: #fff; position: relative;
+    font-family: "Noto Sans TC", "Microsoft JhengHei", "PingFang TC", sans-serif;
+    color: #111; transform-origin: top left; overflow: hidden;
+  }
+  .abs { position: absolute; }
+  .hline { position: absolute; left: 0; width: 800px; height: 2px; background: #111; }
+  .vline { position: absolute; top: 0; left: 399px; width: 2px; height: 480px; background: #111; }
+  .coltitle { font-size: 16px; white-space: nowrap; line-height: 16px; }
+  .holname { font-size: 12px; color: #c22; white-space: nowrap; }
+  .weather { font-size: 13px; white-space: nowrap; }
+  .evtime { font-size: 16px; line-height: 16px; white-space: nowrap; }
+  .evname { font-size: 20px; line-height: 20px; color: #c22; white-space: nowrap; font-weight: 500; }
+  .evaddr { font-size: 12px; line-height: 12px; color: #111; white-space: nowrap; }
+  .footnote { font-size: 12px; line-height: 12px; color: #c22; white-space: nowrap; }
+  .empty { font-size: 16px; color: #111; }
+  #legend { font-size: 11px; color: #888; margin-top: 8px; text-align: center; line-height: 1.6; }
+</style>
+</head>
+<body>
+<div class="toolbar">
+  <button id="prevBtn">◀ 前一日</button>
+  <span id="dayLabel">載入中…</span>
+  <button id="nextBtn">後一日 ▶</button>
+  <input type="date" id="datePick">
+  <button id="todayBtn">今日</button>
+  <button id="reloadBtn">↻ 重載</button>
+</div>
+<div id="gistStatus">連接 Gist…</div>
+<div class="epd-frame">
+  <div id="epdScale">
+    <div id="epd"></div>
+  </div>
+  <div id="legend">
+    800×480 四色墨水屏「今日／聽日」雙欄模擬 ｜ 活動名 20px 紅、時間 16px 黑、地點 12px 黑、底部注意事項 12px 紅<br>
+    天氣為示範值（實機由和風天氣 API 取得）｜資料：GitHub Gist family.json（每 5 分鐘自動重載）
+  </div>
+</div>
+<script>
+"use strict";
+const GIST_URL = "https://gist.githubusercontent.com/applegreentea2023/5423e33306d137099aaed0d2989c7d9b/raw/family.json";
+const FOOTER_Y = 424;          // 底部注意事項分隔線（同 firmware 一致）
+const COL_BOTTOM = FOOTER_Y - 10;
+const X0 = [8, 408];           // 左右欄起點
+const TIME_X = 0, NAME_X = 52; // 相對欄起點
+const LINE_TITLE = 24, LINE_ADDR = 14, GAP_EV = 12;
+const WEEK = ["日","一","二","三","四","五","六"];
+
+let FAM = { children: [], events: [], reminders: [], holidays: [] };
+let base = new Date();          // 左欄（今日）日期
+const $ = id => document.getElementById(id);
+const pad2 = n => String(n).padStart(2, "0");
+const mmddOf = d => pad2(d.getMonth() + 1) + pad2(d.getDate());
+const addDays = (d, n) => { const x = new Date(d); x.setDate(x.getDate() + n); return x; };
+const fwOf = d => { const w = d.getDay(); return w === 0 ? 7 : w; };
+
+// 該日活動：每週恆常（schedule）+ 一次性（events，含日期範圍），照 Gist 順序（同 firmware）
+function itemsFor(d) {
+  const fw = fwOf(d), mmdd = mmddOf(d), out = [];
+  for (const c of (FAM.children || []))
+    for (const s of (c.schedule || []))
+      if (Number(s.weekday) === fw) out.push(s);
+  for (const e of (FAM.events || [])) {
+    if (!e.mmdd) continue;
+    const end = e.mmdd_end || e.mmdd;
+    if (e.mmdd <= mmdd && mmdd <= end) out.push(e);
+  }
+  return out;
+}
+const notesFor = d => (FAM.reminders || []).filter(r => r.mmdd === mmddOf(d));
+const holidayName = d => {
+  const m = mmddOf(d);
+  const h = (FAM.holidays || []).find(x => x.mmdd === m);
+  return h ? h.name : "";
+};
+
+function el(cls, x, y, text) {
+  const e = document.createElement("div");
+  e.className = "abs " + cls;
+  e.style.left = x + "px"; e.style.top = y + "px";
+  if (text != null) e.textContent = text;
+  return e;
+}
+
+function render() {
+  const epd = $("epd");
+  epd.innerHTML = "";
+  const day2 = addDays(base, 1);
+
+  $("dayLabel").textContent = "今日 " + base.getFullYear() + "/" + (base.getMonth() + 1) + "/" + base.getDate();
+
+  // 分隔線
+  const h1 = document.createElement("div"); h1.className = "hline"; h1.style.top = "30px"; epd.appendChild(h1);
+  const h2 = document.createElement("div"); h2.className = "hline"; h2.style.top = FOOTER_Y + "px"; epd.appendChild(h2);
+  const v = document.createElement("div"); v.className = "vline"; epd.appendChild(v);
+
+  [base, day2].forEach((d, col) => {
+    const x0 = X0[col];
+    // 標題：今日/聽日 幾月幾日 星期X
+    const label = (col === 0 ? "今日 " : "聽日 ") + (d.getMonth() + 1) + "月" + d.getDate() + "日 星期" + WEEK[d.getDay()];
+    epd.appendChild(el("coltitle", x0, 6, label));
+    const hol = holidayName(d);
+    if (hol) {
+      const w = label.length * 16; // 大約
+      epd.appendChild(el("holname", x0 + w + 6, 8, hol));
+    }
+    // 天氣（示範值）
+    const demo = col === 0 ? "☀ 27~32°" : "⛅ 26~31°";
+    epd.appendChild(el("weather", x0 + 300, 7, demo));
+
+    // 活動
+    let cy = 46;
+    const items = itemsFor(d);
+    if (!items.length) {
+      epd.appendChild(el("empty", x0, cy, col === 0 ? "今日無安排" : "聽日無安排"));
+    }
+    items.forEach((it, i) => {
+      if (cy > COL_BOTTOM) return;
+      if (i) cy += GAP_EV;
+      const t = String(it.time || "");
+      const time = t.length === 4 ? t.slice(0, 2) + ":" + t.slice(2) : t;
+      const name = it.name || it.text || "";
+      epd.appendChild(el("evtime", x0 + TIME_X, cy, time));
+      if (name) epd.appendChild(el("evname", x0 + NAME_X, cy - 4, name));
+      cy += LINE_TITLE;
+      if (it.address && cy <= COL_BOTTOM) {
+        epd.appendChild(el("evaddr", x0 + NAME_X, cy, it.address));
+        cy += LINE_ADDR;
+      }
+    });
+
+    // 底部注意事項
+    let ny = FOOTER_Y + 16;
+    for (const n of notesFor(d)) {
+      if (ny > 478) break;
+      epd.appendChild(el("footnote", x0, ny, "· " + n.text));
+      ny += 16;
+    }
+  });
+}
+
+function fmtHK(iso) {
+  if (!iso) return "?";
+  const d = new Date(iso);
+  if (isNaN(d)) return iso;
+  const f = new Intl.DateTimeFormat("zh-HK", { timeZone: "Asia/Hong_Kong",
+    year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
+  const p = {}; for (const x of f.formatToParts(d)) p[x.type] = x.value;
+  return p.year + "-" + p.month + "-" + p.day + " " + p.hour + ":" + p.minute;
+}
+
+async function loadGist() {
+  const st = $("gistStatus");
+  st.textContent = "重載中…"; st.className = "";
+  try {
+    const r = await fetch(GIST_URL + "?t=" + Date.now(), { cache: "no-store" });
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    FAM = await r.json();
+    const nSched = (FAM.children || []).reduce((a, c) => a + (c.schedule || []).length, 0);
+    st.textContent = "✓ Gist 已載入（events " + (FAM.events || []).length + "・schedule " + nSched +
+      "・reminders " + (FAM.reminders || []).length + "・updated " + fmtHK(FAM.updated) + " 香港）";
+  } catch (e) {
+    st.textContent = "✗ Gist 載入失敗（" + e.message + "）— 用空白日程顯示";
+    st.className = "err";
+    FAM = { children: [], events: [], reminders: [], holidays: [] };
+  }
+  render();
+}
+
+$("prevBtn").onclick = () => { base = addDays(base, -1); $("datePick").value = isoOf(base); render(); };
+$("nextBtn").onclick = () => { base = addDays(base, 1); $("datePick").value = isoOf(base); render(); };
+$("todayBtn").onclick = () => { base = new Date(); $("datePick").value = isoOf(base); render(); };
+$("datePick").onchange = e => { if (e.target.value) { base = new Date(e.target.value + "T12:00:00"); render(); } };
+$("reloadBtn").onclick = loadGist;
+const isoOf = d => d.getFullYear() + "-" + pad2(d.getMonth() + 1) + "-" + pad2(d.getDate());
+
+function fitScale() {
+  const wrap = $("epdScale"), epd = $("epd");
+  const vv = window.visualViewport;
+  const avail = Math.max(0, (vv ? vv.width : window.innerWidth) - 64);
+  const scale = Math.min(1, avail / 800);
+  epd.style.transform = "scale(" + scale + ")";
+  wrap.style.width = (800 * scale) + "px";
+  wrap.style.height = (480 * scale) + "px";
+}
+window.addEventListener("resize", fitScale);
+window.addEventListener("orientationchange", () => setTimeout(fitScale, 300));
+
+$("datePick").value = isoOf(base);
+loadGist();
+fitScale();
+setInterval(loadGist, 5 * 60 * 1000);
+</script>
+</body>
+</html>
