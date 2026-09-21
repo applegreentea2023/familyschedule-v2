@@ -145,7 +145,7 @@ function render() {
       if (i) cy += GAP_EV;
       const t = String(it.time || "");
       const time = t.length === 4 ? t.slice(0, 2) + ":" + t.slice(2) : t;
-      const name = it.name || it.text || "";
+      const name = it.text || it.name || "";   // family schedule 寫法優先
       epd.appendChild(el("evtime", x0 + TIME_X, cy, time));
       if (name) epd.appendChild(el("evname", x0 + NAME_X, cy - 4, name));
       cy += LINE_TITLE;
